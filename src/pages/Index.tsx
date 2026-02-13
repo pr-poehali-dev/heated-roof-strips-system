@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -318,6 +318,242 @@ function saveSettings(data: Partial<SavedSettings>) {
   } catch (e) { /* ignore */ }
 }
 
+declare global {
+  interface Window {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ymaps: any;
+  }
+}
+
+function parseCoords(coords: string): [number, number] | null {
+  if (!coords) return null;
+  const parts = coords.split(",").map(s => parseFloat(s.trim()));
+  if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) return [parts[0], parts[1]];
+  return null;
+}
+
+function YandexMap({ tapes }: { tapes: Tape[] }) {
+  const mapRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mapInstanceRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (!mapRef.current || !window.ymaps) return;
+
+    const init = () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.destroy();
+        mapInstanceRef.current = null;
+      }
+
+      const tapesWithCoords = tapes
+        .map(t => ({ tape: t, coords: parseCoords(t.coordinates) }))
+        .filter((x): x is { tape: Tape; coords: [number, number] } => x.coords !== null);
+
+      const center: [number, number] = tapesWithCoords.length > 0
+        ? [
+            tapesWithCoords.reduce((a, x) => a + x.coords[0], 0) / tapesWithCoords.length,
+            tapesWithCoords.reduce((a, x) => a + x.coords[1], 0) / tapesWithCoords.length,
+          ]
+        : [55.7558, 37.6173];
+
+      const map = new window.ymaps.Map(mapRef.current, {
+        center,
+        zoom: tapesWithCoords.length > 1 ? 14 : 16,
+        controls: ["zoomControl", "fullscreenControl"],
+      });
+
+      tapesWithCoords.forEach(({ tape, coords }) => {
+        const activeSegs = tape.segments.filter(s => s.enabled);
+        const avgTemp = activeSegs.length > 0
+          ? (activeSegs.reduce((a, s) => a + s.temperature, 0) / activeSegs.length).toFixed(1)
+          : "—";
+
+        const placemark = new window.ymaps.Placemark(
+          coords,
+          {
+            balloonContentHeader: `<strong style="font-family:monospace">${tape.name}</strong>`,
+            balloonContentBody: `
+              <div style="font-family:monospace;font-size:12px;line-height:1.6">
+                ${tape.contractNumber ? `<div>Договор: <b>${tape.contractNumber}</b></div>` : ""}
+                <div>Сегментов: <b>${tape.segments.length}</b> (акт: ${activeSegs.length})</div>
+                <div>Ср. темп: <b>${avgTemp}°C</b></div>
+                <div>Длина: <b>${tape.length} м</b></div>
+                <div>Статус: <b style="color:${tape.enabled ? "#34d399" : "#71717a"}">${tape.enabled ? "Активна" : "Откл."}</b></div>
+              </div>
+            `,
+            hintContent: tape.name,
+          },
+          {
+            preset: tape.enabled ? "islands#redDotIcon" : "islands#grayDotIcon",
+          }
+        );
+        map.geoObjects.add(placemark);
+      });
+
+      if (tapesWithCoords.length > 1) {
+        map.setBounds(map.geoObjects.getBounds(), { checkZoomRange: true, zoomMargin: 50 });
+      }
+
+      mapInstanceRef.current = map;
+    };
+
+    if (window.ymaps.ready) {
+      window.ymaps.ready(init);
+    }
+
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.destroy();
+        mapInstanceRef.current = null;
+      }
+    };
+  }, [tapes]);
+
+  return <div ref={mapRef} className="w-full h-[400px] rounded-lg border border-border" />;
+}
+
+function RoofVisualization({ tape }: { tape: Tape }) {
+  const segs = tape.segments;
+  const segWidth = Math.max(60, Math.floor(800 / segs.length));
+
+  return (
+    <div className="relative w-full overflow-x-auto">
+      <div className="flex gap-0" style={{ minWidth: segs.length * segWidth }}>
+        {segs.map((seg, i) => {
+          const isActive = seg.enabled && tape.enabled;
+          const heatColor = isActive
+            ? `hsl(${Math.max(0, 200 - seg.power * 2)} ${60 + seg.power * 0.3}% ${40 + seg.power * 0.15}%)`
+            : "hsl(220 14% 18%)";
+
+          return (
+            <div
+              key={seg.id}
+              className="flex flex-col items-center relative"
+              style={{ width: segWidth }}
+            >
+              <div
+                className={`w-full border-x border-t ${i === 0 ? "rounded-tl-lg" : ""} ${i === segs.length - 1 ? "rounded-tr-lg" : ""}`}
+                style={{
+                  height: 80,
+                  background: `linear-gradient(180deg, ${heatColor} 0%, ${isActive ? "hsl(220 18% 14%)" : "hsl(220 14% 14%)"} 100%)`,
+                  borderColor: isActive ? "hsl(220 16% 25%)" : "hsl(220 14% 16%)",
+                  clipPath: `polygon(${i === 0 ? "10%" : "0%"} 100%, ${50}% 0%, ${i === segs.length - 1 ? "90%" : "100%"} 100%)`,
+                }}
+              />
+              <div
+                className={`w-full h-10 border-x border-b ${i === 0 ? "rounded-bl-lg" : ""} ${i === segs.length - 1 ? "rounded-br-lg" : ""}`}
+                style={{
+                  background: heatColor,
+                  borderColor: isActive ? "hsl(220 16% 25%)" : "hsl(220 14% 16%)",
+                  opacity: isActive ? 1 : 0.3,
+                }}
+              />
+              <div className="absolute bottom-12 left-1/2 -translate-x-1/2 text-center pointer-events-none">
+                <p className={`text-[10px] font-mono font-bold ${isActive ? getTempColor(seg.temperature) : "text-zinc-600"}`}>
+                  {isActive ? `${seg.temperature.toFixed(1)}°` : "—"}
+                </p>
+              </div>
+              <p className="text-[9px] font-mono text-muted-foreground mt-1">#{seg.id}</p>
+              <p className="text-[9px] font-mono text-muted-foreground">{isActive ? `${seg.power}%` : "выкл"}</p>
+              <div className={`absolute top-2 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full ${seg.status === "normal" ? "bg-emerald-400" : seg.status === "warning" ? "bg-amber-400 animate-pulse" : seg.status === "critical" ? "bg-red-400 animate-pulse" : "bg-zinc-600"}`} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function VisualizationTab({ tapes }: { tapes: Tape[] }) {
+  const [selectedTape, setSelectedTape] = useState<number | null>(null);
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-sm font-mono text-muted-foreground flex items-center gap-2">
+        <Icon name="Map" size={16} className="text-primary" />
+        ВИЗУАЛИЗАЦИЯ ЛЕНТЫ — СКАТ КРЫШИ
+      </h2>
+
+      {tapes.map(tape => {
+        const activeSegs = tape.segments.filter(s => s.enabled);
+        const avgTemp = activeSegs.length > 0
+          ? (activeSegs.reduce((a, s) => a + s.temperature, 0) / activeSegs.length).toFixed(1)
+          : "—";
+        const coords = parseCoords(tape.coordinates);
+        const isSelected = selectedTape === tape.id;
+
+        return (
+          <Card
+            key={tape.id}
+            className={`bg-card border-border cursor-pointer transition-all ${isSelected ? "ring-1 ring-primary" : ""} ${!tape.enabled ? "opacity-50" : ""}`}
+            onClick={() => setSelectedTape(isSelected ? null : tape.id)}
+          >
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-mono flex items-center gap-2 flex-wrap">
+                <div className={`w-3 h-3 rounded-full ${tape.enabled ? "bg-emerald-400" : "bg-zinc-600"}`} />
+                <Icon name="Layers" size={16} className="text-primary" />
+                {tape.name}
+                {tape.contractNumber && (
+                  <Badge variant="secondary" className="font-mono text-[10px]">{tape.contractNumber}</Badge>
+                )}
+                {coords && (
+                  <span className="text-[11px] text-muted-foreground font-normal flex items-center gap-1">
+                    <Icon name="MapPin" size={12} /> {tape.coordinates}
+                  </span>
+                )}
+                <Badge variant="secondary" className="font-mono text-[10px]">{tape.segments.length} сегм.</Badge>
+                <span className="text-[11px] text-muted-foreground font-normal ml-auto">
+                  ср. {avgTemp}° • {tape.length}м
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <RoofVisualization tape={tape} />
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                {tape.segments.map(seg => (
+                  <div key={seg.id} className={`p-2 rounded border text-center font-mono text-[11px] ${getStatusBg(seg.status)}`}>
+                    <p className="text-[9px] text-muted-foreground">#{seg.id}</p>
+                    <p className={`font-bold ${seg.enabled && tape.enabled ? getTempColor(seg.temperature) : "text-zinc-600"}`}>
+                      {seg.enabled && tape.enabled ? `${seg.temperature.toFixed(1)}°` : "—"}
+                    </p>
+                    <p className="text-[9px] text-muted-foreground">{seg.enabled && tape.enabled ? `${seg.power}%` : "выкл"}</p>
+                    <div className="flex gap-0.5 mt-1">
+                      {seg.sensors.map(sensor => (
+                        <div key={sensor.id} className={`w-1.5 h-1.5 rounded-full ${sensor.status === "online" ? "bg-emerald-400" : sensor.status === "error" ? "bg-red-400" : "bg-zinc-600"}`} title={`${sensor.id}: ${sensor.temperature}°C`} />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+
+      <Card className="bg-card border-border">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-mono flex items-center gap-2">
+            <Icon name="MapPin" size={16} className="text-primary" />
+            КАРТА РАСПОЛОЖЕНИЯ
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <YandexMap tapes={tapes} />
+          <div className="flex gap-4 mt-3 text-[11px] font-mono text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <div className="w-2.5 h-2.5 rounded-full bg-red-400" /> Активная лента
+            </span>
+            <span className="flex items-center gap-1.5">
+              <div className="w-2.5 h-2.5 rounded-full bg-zinc-500" /> Отключённая лента
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 const Index = () => {
   const saved = loadSettings();
 
@@ -491,6 +727,7 @@ const Index = () => {
           <TabsList className="bg-card border border-border h-auto flex-wrap gap-1 p-1">
             {[
               { value: "monitor", icon: "Monitor", label: "Монитор" },
+              { value: "visual", icon: "Map", label: "Визуализация" },
               { value: "control", icon: "SlidersHorizontal", label: "Управление" },
               { value: "params", icon: "Settings2", label: "Параметры" },
               { value: "sensors", icon: "Thermometer", label: "Датчики" },
@@ -642,6 +879,11 @@ const Index = () => {
                 </ResponsiveContainer>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* ВИЗУАЛИЗАЦИЯ ЛЕНТЫ — СКАТ КРЫШИ */}
+          <TabsContent value="visual" className="space-y-4">
+            <VisualizationTab tapes={tapes} />
           </TabsContent>
 
           {/* УПРАВЛЕНИЕ */}
