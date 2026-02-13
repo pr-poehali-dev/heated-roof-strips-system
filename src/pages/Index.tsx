@@ -30,6 +30,14 @@ import {
   Area,
 } from "recharts";
 
+interface Sensor {
+  id: string;
+  serial: string;
+  temperature: number;
+  status: "online" | "offline" | "error";
+  lastUpdate: string;
+}
+
 interface Segment {
   id: number;
   name: string;
@@ -39,6 +47,7 @@ interface Segment {
   targetTemp: number;
   status: "normal" | "warning" | "critical" | "off";
   sensorId: string;
+  sensors: Sensor[];
 }
 
 interface LogEntry {
@@ -57,16 +66,39 @@ interface Alert {
   acknowledged: boolean;
 }
 
-const INITIAL_SEGMENTS: Segment[] = Array.from({ length: 12 }, (_, i) => ({
-  id: i + 1,
-  name: `Сегмент ${i + 1}`,
-  enabled: i < 8,
-  power: 40 + Math.floor(Math.random() * 50),
-  temperature: -5 + Math.floor(Math.random() * 15),
-  targetTemp: 5,
-  status: i < 8 ? (Math.random() > 0.8 ? "warning" : "normal") : "off",
-  sensorId: `DS18B20-${String(i + 1).padStart(3, "0")}`,
-}));
+function generateSerial() {
+  const hex = () => Math.floor(Math.random() * 256).toString(16).toUpperCase().padStart(2, "0");
+  return `28-${hex()}${hex()}${hex()}${hex()}${hex()}${hex()}`;
+}
+
+function createSensors(segId: number, count: number): Sensor[] {
+  return Array.from({ length: count }, (_, j) => ({
+    id: `DS18B20-${String(segId).padStart(2, "0")}${String(j + 1).padStart(2, "0")}`,
+    serial: generateSerial(),
+    temperature: -5 + Math.floor(Math.random() * 15),
+    status: Math.random() > 0.9 ? "offline" : "online" as Sensor["status"],
+    lastUpdate: new Date().toLocaleTimeString("ru-RU"),
+  }));
+}
+
+function createSegment(id: number, enabled: boolean): Segment {
+  const sensorCount = 2 + Math.floor(Math.random() * 3);
+  const sensors = createSensors(id, sensorCount);
+  const avgTemp = sensors.reduce((a, s) => a + s.temperature, 0) / sensors.length;
+  return {
+    id,
+    name: `Сегмент ${id}`,
+    enabled,
+    power: 40 + Math.floor(Math.random() * 50),
+    temperature: Math.round(avgTemp * 10) / 10,
+    targetTemp: 5,
+    status: enabled ? (Math.random() > 0.8 ? "warning" : "normal") : "off",
+    sensorId: `DS18B20-${String(id).padStart(3, "0")}`,
+    sensors,
+  };
+}
+
+const INITIAL_SEGMENTS: Segment[] = Array.from({ length: 12 }, (_, i) => createSegment(i + 1, i < 8));
 
 const generateChartData = () => {
   const now = new Date();
@@ -278,6 +310,17 @@ const Index = () => {
 
   const acknowledgeAlert = useCallback((id: number) => {
     setAlerts(prev => prev.map(a => (a.id === id ? { ...a, acknowledged: true } : a)));
+  }, []);
+
+  const addSegment = useCallback(() => {
+    setSegments(prev => {
+      const maxId = prev.reduce((max, s) => Math.max(max, s.id), 0);
+      return [...prev, createSegment(maxId + 1, false)];
+    });
+  }, []);
+
+  const removeSegment = useCallback((id: number) => {
+    setSegments(prev => prev.length > 1 ? prev.filter(s => s.id !== id) : prev);
   }, []);
 
   const activeSegments = segments.filter(s => s.enabled).length;
@@ -501,7 +544,10 @@ const Index = () => {
                 <Icon name="SlidersHorizontal" size={16} className="text-primary" />
                 НЕЗАВИСИМОЕ УПРАВЛЕНИЕ СЕГМЕНТАМИ
               </h2>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
+                <Button size="sm" variant="outline" className="font-mono text-xs" onClick={addSegment}>
+                  <Icon name="Plus" size={14} className="mr-1" /> Добавить сегмент
+                </Button>
                 <Button size="sm" variant="outline" className="font-mono text-xs" onClick={() => setSegments(prev => prev.map(s => ({ ...s, enabled: true, status: "normal" })))}>
                   <Icon name="Power" size={14} className="mr-1" /> Вкл. все
                 </Button>
@@ -520,10 +566,15 @@ const Index = () => {
                         <div className={`w-2.5 h-2.5 rounded-full ${seg.status === "normal" ? "bg-emerald-400" : seg.status === "warning" ? "bg-amber-400 animate-pulse" : seg.status === "critical" ? "bg-red-400 animate-pulse" : "bg-zinc-600"}`} />
                         <span className="font-mono font-bold text-sm">{seg.name}</span>
                         <Badge variant="secondary" className="font-mono text-[10px] px-1.5 py-0">
-                          {seg.sensorId}
+                          <Icon name="Thermometer" size={10} className="mr-0.5" />{seg.sensors.length} датч.
                         </Badge>
                       </div>
-                      <Switch checked={seg.enabled} onCheckedChange={() => toggleSegment(seg.id)} />
+                      <div className="flex items-center gap-2">
+                        <Switch checked={seg.enabled} onCheckedChange={() => toggleSegment(seg.id)} />
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-red-400" onClick={() => removeSegment(seg.id)}>
+                          <Icon name="Trash2" size={14} />
+                        </Button>
+                      </div>
                     </div>
 
                     {seg.enabled && (
@@ -699,56 +750,75 @@ const Index = () => {
 
           {/* ДАТЧИКИ */}
           <TabsContent value="sensors" className="space-y-4">
-            <Card className="bg-card border-border">
-              <CardHeader>
-                <CardTitle className="text-sm font-mono flex items-center gap-2">
-                  <Icon name="Thermometer" size={16} className="text-primary" />
-                  ДАТЧИКИ ТЕМПЕРАТУРЫ DS18B20
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                  {segments.map(seg => (
-                    <div key={seg.id} className={`p-4 rounded-lg border transition-all ${getStatusBg(seg.status)}`}>
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <Icon name="Thermometer" size={16} className={getStatusColor(seg.status)} />
-                          <span className="font-mono text-sm font-bold">{seg.sensorId}</span>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-sm font-mono text-muted-foreground flex items-center gap-2">
+                <Icon name="Thermometer" size={16} className="text-primary" />
+                ДАТЧИКИ ТЕМПЕРАТУРЫ DS18B20 — всего {segments.reduce((a, s) => a + s.sensors.length, 0)} шт.
+              </h2>
+            </div>
+            {segments.map(seg => (
+              <Card key={seg.id} className="bg-card border-border">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-mono flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${seg.enabled ? "bg-emerald-400" : "bg-zinc-600"}`} />
+                    {seg.name}
+                    <Badge variant="secondary" className="font-mono text-[10px]">{seg.sensors.length} датчиков</Badge>
+                    <Badge variant="secondary" className={`font-mono text-[10px] ${getStatusColor(seg.status)}`}>
+                      {seg.status === "normal" ? "НОРМА" : seg.status === "warning" ? "ВНИМАНИЕ" : seg.status === "critical" ? "КРИТИЧ" : "ОТКЛ"}
+                    </Badge>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                    {seg.sensors.map(sensor => (
+                      <div key={sensor.id} className={`p-3 rounded-lg border transition-all ${sensor.status === "online" ? "bg-emerald-400/5 border-emerald-400/20" : sensor.status === "error" ? "bg-red-400/5 border-red-400/20" : "bg-zinc-800/50 border-zinc-700/30"}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <Icon name="Thermometer" size={14} className={sensor.status === "online" ? "text-emerald-400" : sensor.status === "error" ? "text-red-400" : "text-zinc-500"} />
+                            <span className="font-mono text-xs font-bold">{sensor.id}</span>
+                          </div>
+                          <Badge variant="secondary" className={`font-mono text-[10px] ${sensor.status === "online" ? "text-emerald-400" : sensor.status === "error" ? "text-red-400" : "text-zinc-500"}`}>
+                            {sensor.status === "online" ? "ОНЛАЙН" : sensor.status === "error" ? "ОШИБКА" : "ОФЛАЙН"}
+                          </Badge>
                         </div>
-                        <Badge variant="secondary" className={`font-mono text-[10px] ${getStatusColor(seg.status)}`}>
-                          {seg.status === "normal" ? "НОРМА" : seg.status === "warning" ? "ВНИМАНИЕ" : seg.status === "critical" ? "КРИТИЧ" : "ОТКЛ"}
-                        </Badge>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2 text-center">
-                        <div className="p-2 rounded bg-background/50">
-                          <p className="text-[10px] text-muted-foreground font-mono">ТЕКУЩАЯ</p>
-                          <p className={`text-xl font-bold font-mono ${seg.enabled ? getTempColor(seg.temperature) : "text-zinc-600"}`}>
-                            {seg.enabled ? `${seg.temperature.toFixed(1)}°` : "—"}
+                        <div className="p-2 rounded bg-background/50 text-center mb-2">
+                          <p className="text-[10px] text-muted-foreground font-mono">ТЕМПЕРАТУРА</p>
+                          <p className={`text-xl font-bold font-mono ${sensor.status === "online" ? getTempColor(sensor.temperature) : "text-zinc-600"}`}>
+                            {sensor.status === "online" ? `${sensor.temperature.toFixed(1)}°C` : "—"}
                           </p>
                         </div>
-                        <div className="p-2 rounded bg-background/50">
-                          <p className="text-[10px] text-muted-foreground font-mono">МИН 24ч</p>
-                          <p className="text-xl font-bold font-mono text-blue-400">
-                            {seg.enabled ? `${(seg.temperature - 3 - Math.random() * 2).toFixed(1)}°` : "—"}
-                          </p>
-                        </div>
-                        <div className="p-2 rounded bg-background/50">
-                          <p className="text-[10px] text-muted-foreground font-mono">МАКС 24ч</p>
-                          <p className="text-xl font-bold font-mono text-red-400">
-                            {seg.enabled ? `${(seg.temperature + 2 + Math.random() * 3).toFixed(1)}°` : "—"}
-                          </p>
+                        <div className="space-y-1 text-[11px] font-mono text-muted-foreground">
+                          <div className="flex justify-between">
+                            <span>Серийный №</span>
+                            <span className="text-foreground font-medium">{sensor.serial}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Привязка</span>
+                            <span className="text-foreground">{seg.name}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Точность</span>
+                            <span className="text-foreground">±0.5°C</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Разрешение</span>
+                            <span className="text-foreground">12 бит</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Шина</span>
+                            <span className="text-foreground">1-Wire</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Обновление</span>
+                            <span className="text-foreground">{sensor.lastUpdate}</span>
+                          </div>
                         </div>
                       </div>
-                      <div className="mt-3 space-y-1 text-[11px] font-mono text-muted-foreground">
-                        <div className="flex justify-between"><span>Привязка</span><span className="text-foreground">{seg.name}</span></div>
-                        <div className="flex justify-between"><span>Точность</span><span className="text-foreground">±0.5°C</span></div>
-                        <div className="flex justify-between"><span>Обновление</span><span className="text-foreground">каждые 2 сек</span></div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </TabsContent>
 
           {/* ГРАФИКИ */}
