@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -182,18 +182,64 @@ function getHeatLevel(power: number) {
   return 7;
 }
 
+const STORAGE_KEY = "heater-tape-settings";
+
+interface SavedSettings {
+  segments: Segment[];
+  alerts: Alert[];
+  systemOn: boolean;
+  tapeLength: string;
+  tapeWidth: string;
+  autoMode: boolean;
+  thresholdTemp: string;
+  alertSound: string;
+  pollInterval: string;
+}
+
+function loadSettings(): Partial<SavedSettings> | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function saveSettings(data: Partial<SavedSettings>) {
+  try {
+    const existing = loadSettings() || {};
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...existing, ...data }));
+  } catch (e) { /* ignore */ }
+}
+
 const Index = () => {
-  const [segments, setSegments] = useState<Segment[]>(INITIAL_SEGMENTS);
+  const saved = loadSettings();
+
+  const [segments, setSegments] = useState<Segment[]>(saved?.segments || INITIAL_SEGMENTS);
   const [chartData] = useState(generateChartData);
   const [logs] = useState(generateLogs);
-  const [alerts, setAlerts] = useState(generateAlerts);
-  const [systemOn, setSystemOn] = useState(true);
+  const [alerts, setAlerts] = useState(saved?.alerts || generateAlerts);
+  const [systemOn, setSystemOn] = useState(saved?.systemOn ?? true);
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [tapeLength, setTapeLength] = useState("24");
-  const [tapeWidth, setTapeWidth] = useState("50");
-  const [autoMode, setAutoMode] = useState(true);
-  const [thresholdTemp, setThresholdTemp] = useState("5");
-  const [alertSound, setAlertSound] = useState(true);
+  const [tapeLength, setTapeLength] = useState(saved?.tapeLength ?? "24");
+  const [tapeWidth, setTapeWidth] = useState(saved?.tapeWidth ?? "50");
+  const [autoMode, setAutoMode] = useState(saved?.autoMode ?? true);
+  const [thresholdTemp, setThresholdTemp] = useState(saved?.thresholdTemp ?? "5");
+  const [alertSound, setAlertSound] = useState(saved?.alertSound === "false" ? false : true);
+  const [pollInterval, setPollInterval] = useState(saved?.pollInterval ?? "2");
+
+  useEffect(() => {
+    saveSettings({ segments: segments.map(s => ({ ...s })) });
+  }, [segments]);
+
+  useEffect(() => {
+    saveSettings({ systemOn, tapeLength, tapeWidth, autoMode, thresholdTemp, alertSound: String(alertSound), pollInterval });
+  }, [systemOn, tapeLength, tapeWidth, autoMode, thresholdTemp, alertSound, pollInterval]);
+
+  useEffect(() => {
+    saveSettings({ alerts });
+  }, [alerts]);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -214,25 +260,25 @@ const Index = () => {
     return () => clearInterval(timer);
   }, []);
 
-  const toggleSegment = (id: number) => {
+  const toggleSegment = useCallback((id: number) => {
     setSegments(prev =>
       prev.map(s =>
         s.id === id ? { ...s, enabled: !s.enabled, status: !s.enabled ? "normal" : "off" } : s
       )
     );
-  };
+  }, []);
 
-  const setPower = (id: number, power: number) => {
+  const setPower = useCallback((id: number, power: number) => {
     setSegments(prev => prev.map(s => (s.id === id ? { ...s, power } : s)));
-  };
+  }, []);
 
-  const setTargetTemp = (id: number, targetTemp: number) => {
+  const setTargetTemp = useCallback((id: number, targetTemp: number) => {
     setSegments(prev => prev.map(s => (s.id === id ? { ...s, targetTemp } : s)));
-  };
+  }, []);
 
-  const acknowledgeAlert = (id: number) => {
+  const acknowledgeAlert = useCallback((id: number) => {
     setAlerts(prev => prev.map(a => (a.id === id ? { ...a, acknowledged: true } : a)));
-  };
+  }, []);
 
   const activeSegments = segments.filter(s => s.enabled).length;
   const avgTemp = segments.filter(s => s.enabled).length > 0
@@ -853,7 +899,7 @@ const Index = () => {
                   </div>
                   <div>
                     <Label className="text-xs font-mono text-muted-foreground">ИНТЕРВАЛ ОПРОСА</Label>
-                    <Select defaultValue="2">
+                    <Select value={pollInterval} onValueChange={setPollInterval}>
                       <SelectTrigger className="font-mono mt-1 bg-secondary border-border">
                         <SelectValue />
                       </SelectTrigger>
