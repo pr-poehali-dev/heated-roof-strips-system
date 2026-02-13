@@ -228,11 +228,24 @@ interface SavedSettings {
   pollInterval: string;
 }
 
+function migrateSegments(segs: Segment[]): Segment[] {
+  return segs.map(s => {
+    if (!s.sensors || !Array.isArray(s.sensors)) {
+      return { ...s, sensors: createSensors(s.id, 2 + Math.floor(Math.random() * 3)) };
+    }
+    return s;
+  });
+}
+
 function loadSettings(): Partial<SavedSettings> | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (parsed.segments) {
+      parsed.segments = migrateSegments(parsed.segments);
+    }
+    return parsed;
   } catch {
     return null;
   }
