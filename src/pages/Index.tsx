@@ -252,6 +252,22 @@ function getHeatLevel(power: number) {
 
 const STORAGE_KEY = "heater-tape-settings";
 
+type DeviceConnectionType = "ip" | "serial" | "usb";
+type DeviceStatus = "online" | "offline" | "error" | "unknown";
+
+interface ArduinoDevice {
+  id: number;
+  name: string;
+  connectionType: DeviceConnectionType;
+  ip: string;
+  port: string;
+  serialPort: string;
+  baudRate: string;
+  description: string;
+  status: DeviceStatus;
+  enabled: boolean;
+}
+
 interface SavedSettings {
   tapes: Tape[];
   alerts: Alert[];
@@ -260,6 +276,7 @@ interface SavedSettings {
   thresholdTemp: string;
   alertSound: string;
   pollInterval: string;
+  devices: ArduinoDevice[];
 }
 
 function migrateSegments(segs: Segment[]): Segment[] {
@@ -567,6 +584,19 @@ const Index = () => {
   const [thresholdTemp, setThresholdTemp] = useState(saved?.thresholdTemp ?? "5");
   const [alertSound, setAlertSound] = useState(saved?.alertSound === "false" ? false : true);
   const [pollInterval, setPollInterval] = useState(saved?.pollInterval ?? "2");
+  const [devices, setDevices] = useState<ArduinoDevice[]>(saved?.devices || []);
+  const [deviceForm, setDeviceForm] = useState<Partial<ArduinoDevice>>({
+    name: "",
+    connectionType: "ip",
+    ip: "",
+    port: "80",
+    serialPort: "COM3",
+    baudRate: "9600",
+    description: "",
+    enabled: true,
+  });
+  const [editingDeviceId, setEditingDeviceId] = useState<number | null>(null);
+  const [showDeviceForm, setShowDeviceForm] = useState(false);
 
   useEffect(() => {
     saveSettings({ tapes });
@@ -579,6 +609,10 @@ const Index = () => {
   useEffect(() => {
     saveSettings({ alerts });
   }, [alerts]);
+
+  useEffect(() => {
+    saveSettings({ devices });
+  }, [devices]);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -1404,6 +1438,239 @@ const Index = () => {
                     <div className="flex justify-between"><span className="text-muted-foreground">Всего датчиков</span><span>{totalSensors}</span></div>
                     <div className="flex justify-between"><span className="text-muted-foreground">Общая длина лент</span><span>{totalLength} м</span></div>
                   </div>
+                </CardContent>
+              </Card>
+
+              {/* ОБОРУДОВАНИЕ */}
+              <Card className="bg-card border-border md:col-span-2">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-sm font-mono flex items-center gap-2">
+                      <Icon name="Cpu" size={16} className="text-primary" />
+                      ОБОРУДОВАНИЕ (ARDUINO / КОНТРОЛЛЕРЫ)
+                    </CardTitle>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="font-mono text-xs gap-1.5"
+                      onClick={() => {
+                        setEditingDeviceId(null);
+                        setDeviceForm({ name: "", connectionType: "ip", ip: "", port: "80", serialPort: "COM3", baudRate: "9600", description: "", enabled: true });
+                        setShowDeviceForm(v => !v);
+                      }}
+                    >
+                      <Icon name={showDeviceForm && editingDeviceId === null ? "X" : "Plus"} size={14} />
+                      {showDeviceForm && editingDeviceId === null ? "Отмена" : "Добавить"}
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* Форма добавления / редактирования */}
+                  {showDeviceForm && (
+                    <div className="border border-border rounded-lg p-4 space-y-3 bg-secondary/30">
+                      <p className="text-xs font-mono text-muted-foreground">{editingDeviceId !== null ? "РЕДАКТИРОВАТЬ УСТРОЙСТВО" : "НОВОЕ УСТРОЙСТВО"}</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label className="text-xs font-mono text-muted-foreground">НАЗВАНИЕ</Label>
+                          <Input
+                            value={deviceForm.name ?? ""}
+                            onChange={e => setDeviceForm(f => ({ ...f, name: e.target.value }))}
+                            placeholder="Arduino Nano / ESP32 #1"
+                            className="font-mono mt-1 bg-secondary border-border text-sm"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs font-mono text-muted-foreground">ТИП ПОДКЛЮЧЕНИЯ</Label>
+                          <Select
+                            value={deviceForm.connectionType ?? "ip"}
+                            onValueChange={v => setDeviceForm(f => ({ ...f, connectionType: v as DeviceConnectionType }))}
+                          >
+                            <SelectTrigger className="font-mono mt-1 bg-secondary border-border text-sm">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="ip">IP-адрес (сеть)</SelectItem>
+                              <SelectItem value="serial">COM-порт (USB/Serial)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {deviceForm.connectionType === "ip" ? (
+                          <>
+                            <div>
+                              <Label className="text-xs font-mono text-muted-foreground">IP-АДРЕС</Label>
+                              <Input
+                                value={deviceForm.ip ?? ""}
+                                onChange={e => setDeviceForm(f => ({ ...f, ip: e.target.value }))}
+                                placeholder="192.168.1.100"
+                                className="font-mono mt-1 bg-secondary border-border text-sm"
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-xs font-mono text-muted-foreground">ПОРТ</Label>
+                              <Input
+                                value={deviceForm.port ?? "80"}
+                                onChange={e => setDeviceForm(f => ({ ...f, port: e.target.value }))}
+                                placeholder="80"
+                                className="font-mono mt-1 bg-secondary border-border text-sm"
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div>
+                              <Label className="text-xs font-mono text-muted-foreground">COM-ПОРТ</Label>
+                              <Input
+                                value={deviceForm.serialPort ?? ""}
+                                onChange={e => setDeviceForm(f => ({ ...f, serialPort: e.target.value }))}
+                                placeholder="COM3 или /dev/ttyUSB0"
+                                className="font-mono mt-1 bg-secondary border-border text-sm"
+                              />
+                            </div>
+                            <div>
+                              <Label className="text-xs font-mono text-muted-foreground">СКОРОСТЬ (BAUD RATE)</Label>
+                              <Select
+                                value={deviceForm.baudRate ?? "9600"}
+                                onValueChange={v => setDeviceForm(f => ({ ...f, baudRate: v }))}
+                              >
+                                <SelectTrigger className="font-mono mt-1 bg-secondary border-border text-sm">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {["9600", "19200", "38400", "57600", "115200"].map(b => (
+                                    <SelectItem key={b} value={b}>{b}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </>
+                        )}
+                        <div className="sm:col-span-2">
+                          <Label className="text-xs font-mono text-muted-foreground">ОПИСАНИЕ (НЕОБЯЗАТЕЛЬНО)</Label>
+                          <Input
+                            value={deviceForm.description ?? ""}
+                            onChange={e => setDeviceForm(f => ({ ...f, description: e.target.value }))}
+                            placeholder="Датчики ската №1, крыша гаража..."
+                            className="font-mono mt-1 bg-secondary border-border text-sm"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex gap-2 pt-1">
+                        <Button
+                          size="sm"
+                          className="font-mono text-xs gap-1.5"
+                          onClick={() => {
+                            if (!deviceForm.name) return;
+                            if (editingDeviceId !== null) {
+                              setDevices(ds => ds.map(d => d.id === editingDeviceId ? { ...d, ...deviceForm, id: d.id } as ArduinoDevice : d));
+                            } else {
+                              const newDevice: ArduinoDevice = {
+                                id: Date.now(),
+                                name: deviceForm.name ?? "Устройство",
+                                connectionType: deviceForm.connectionType ?? "ip",
+                                ip: deviceForm.ip ?? "",
+                                port: deviceForm.port ?? "80",
+                                serialPort: deviceForm.serialPort ?? "",
+                                baudRate: deviceForm.baudRate ?? "9600",
+                                description: deviceForm.description ?? "",
+                                status: "unknown",
+                                enabled: true,
+                              };
+                              setDevices(ds => [...ds, newDevice]);
+                            }
+                            setShowDeviceForm(false);
+                            setEditingDeviceId(null);
+                          }}
+                        >
+                          <Icon name="Save" size={13} />
+                          {editingDeviceId !== null ? "Сохранить" : "Добавить"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="font-mono text-xs"
+                          onClick={() => { setShowDeviceForm(false); setEditingDeviceId(null); }}
+                        >
+                          Отмена
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Список устройств */}
+                  {devices.length === 0 && !showDeviceForm && (
+                    <div className="text-center py-8 text-muted-foreground font-mono text-sm">
+                      <Icon name="Cpu" size={32} className="mx-auto mb-3 opacity-30" />
+                      <p>Устройства не добавлены</p>
+                      <p className="text-xs mt-1">Добавьте Arduino или контроллер по IP или COM-порту</p>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    {devices.map(device => (
+                      <div
+                        key={device.id}
+                        className={`flex items-start gap-3 p-3 rounded-lg border transition-colors ${device.enabled ? "border-border bg-secondary/20" : "border-border/40 bg-secondary/10 opacity-60"}`}
+                      >
+                        <div className="mt-0.5">
+                          <Icon name={device.connectionType === "ip" ? "Wifi" : "Usb"} size={18} className="text-primary" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-sm font-bold">{device.name}</span>
+                            <Badge
+                              variant="secondary"
+                              className={`font-mono text-[10px] ${device.status === "online" ? "text-emerald-400" : device.status === "error" ? "text-red-400" : "text-zinc-400"}`}
+                            >
+                              {device.status === "online" ? "● онлайн" : device.status === "error" ? "● ошибка" : "● неизвестно"}
+                            </Badge>
+                            <Badge variant="outline" className="font-mono text-[10px]">
+                              {device.connectionType === "ip" ? "IP" : "COM"}
+                            </Badge>
+                          </div>
+                          <p className="text-xs font-mono text-muted-foreground mt-0.5">
+                            {device.connectionType === "ip"
+                              ? `${device.ip}:${device.port}`
+                              : `${device.serialPort} @ ${device.baudRate} baud`}
+                          </p>
+                          {device.description && (
+                            <p className="text-xs text-muted-foreground mt-0.5">{device.description}</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Switch
+                            checked={device.enabled}
+                            onCheckedChange={v => setDevices(ds => ds.map(d => d.id === device.id ? { ...d, enabled: v } : d))}
+                          />
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7"
+                            onClick={() => {
+                              setDeviceForm({ ...device });
+                              setEditingDeviceId(device.id);
+                              setShowDeviceForm(true);
+                            }}
+                          >
+                            <Icon name="Pencil" size={13} />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7 text-red-400 hover:text-red-300"
+                            onClick={() => setDevices(ds => ds.filter(d => d.id !== device.id))}
+                          >
+                            <Icon name="Trash2" size={13} />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {devices.length > 0 && (
+                    <p className="text-[11px] font-mono text-muted-foreground pt-1">
+                      Всего устройств: {devices.length} • Активных: {devices.filter(d => d.enabled).length}
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             </div>
