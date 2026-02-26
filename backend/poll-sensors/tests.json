@@ -1,0 +1,43 @@
+{
+  "tests": [
+    {
+      "name": "OPTIONS preflight",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200
+    },
+    {
+      "name": "Poll empty sensors list",
+      "method": "POST",
+      "path": "/",
+      "body": { "devices": [], "sensors": [] },
+      "expectedStatus": 200,
+      "expectedBody": { "results": [] },
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Poll sensor with no device",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "devices": [],
+        "sensors": [{ "id": "SN-001", "serialNumber": "28-FF1234ABCD", "deviceId": 999 }]
+      },
+      "expectedStatus": 200,
+      "expectedBody": { "results": [{ "sensorId": "SN-001", "status": "offline" }] },
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Poll serial-port sensor returns offline with message",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "devices": [{ "id": 1, "name": "Arduino COM3", "connectionType": "serial", "serialPort": "COM3", "baudRate": "9600", "enabled": true }],
+        "sensors": [{ "id": "SN-002", "serialNumber": "28-AABBCCDD", "deviceId": 1 }]
+      },
+      "expectedStatus": 200,
+      "expectedBody": { "results": [{ "sensorId": "SN-002", "status": "offline" }] },
+      "bodyMatcher": "partial"
+    }
+  ]
+}

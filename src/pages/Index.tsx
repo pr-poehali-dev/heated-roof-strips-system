@@ -624,20 +624,88 @@ const Index = () => {
     return () => clearInterval(timer);
   }, []);
 
+  const POLL_URL = "https://functions.poehali.dev/e0f64169-c827-42b8-a6df-00695f0e7033";
+  const [pollStatus, setPollStatus] = useState<"idle" | "polling" | "error">("idle");
+  const [lastPollTime, setLastPollTime] = useState<string | null>(null);
+
   useEffect(() => {
-    const timer = setInterval(() => {
-      setTapes(prev => prev.map(t => ({
-        ...t,
-        segments: t.segments.map(s => {
-          if (!s.enabled || !t.enabled) return s;
-          const drift = (Math.random() - 0.5) * 1.5;
-          const newTemp = Math.round((s.temperature + drift) * 10) / 10;
-          return { ...s, temperature: newTemp };
-        }),
-      })));
-    }, 3000);
+    const allSensors = tapes.flatMap(t =>
+      t.segments.flatMap(s => s.sensors.map(sr => ({ id: sr.id, serialNumber: sr.serialNumber || sr.serial, deviceId: sr.deviceId })))
+    );
+    const hasRealSensors = allSensors.some(sr => sr.deviceId != null);
+    const enabledDevices = devices.filter(d => d.enabled);
+
+    if (!hasRealSensors || enabledDevices.length === 0) {
+      // Нет реальных датчиков — используем симуляцию
+      const timer = setInterval(() => {
+        setTapes(prev => prev.map(t => ({
+          ...t,
+          segments: t.segments.map(s => {
+            if (!s.enabled || !t.enabled) return s;
+            const drift = (Math.random() - 0.5) * 1.5;
+            const newTemp = Math.round((s.temperature + drift) * 10) / 10;
+            return {
+              ...s,
+              temperature: newTemp,
+              sensors: s.sensors.map(sr => ({
+                ...sr,
+                temperature: Math.round((sr.temperature + (Math.random() - 0.5) * 1.2) * 10) / 10,
+                lastUpdate: new Date().toLocaleTimeString("ru-RU"),
+              })),
+            };
+          }),
+        })));
+      }, 3000);
+      return () => clearInterval(timer);
+    }
+
+    // Есть реальные датчики — опрашиваем бэкенд
+    const intervalSec = Math.max(2, parseInt(pollInterval) || 5) * 1000;
+
+    const doPoll = async () => {
+      setPollStatus("polling");
+      try {
+        const resp = await fetch(POLL_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ devices: enabledDevices, sensors: allSensors }),
+        });
+        const data = await resp.json();
+        const resultMap: Record<string, { temperature: number | null; status: string; lastUpdate: string }> = {};
+        for (const r of data.results || []) {
+          resultMap[r.sensorId] = { temperature: r.temperature, status: r.status, lastUpdate: r.lastUpdate };
+        }
+        setTapes(prev => prev.map(t => ({
+          ...t,
+          segments: t.segments.map(s => {
+            const updatedSensors = s.sensors.map(sr => {
+              const res = resultMap[sr.id];
+              if (!res) return sr;
+              return {
+                ...sr,
+                temperature: res.temperature ?? sr.temperature,
+                status: res.status as Sensor["status"],
+                lastUpdate: res.lastUpdate,
+              };
+            });
+            const onlineSensors = updatedSensors.filter(sr => sr.status === "online");
+            const avgTemp = onlineSensors.length > 0
+              ? Math.round((onlineSensors.reduce((a, sr) => a + sr.temperature, 0) / onlineSensors.length) * 10) / 10
+              : s.temperature;
+            return { ...s, sensors: updatedSensors, temperature: avgTemp };
+          }),
+        })));
+        setLastPollTime(data.polledAt || new Date().toLocaleTimeString("ru-RU"));
+        setPollStatus("idle");
+      } catch {
+        setPollStatus("error");
+      }
+    };
+
+    doPoll();
+    const timer = setInterval(doPoll, intervalSec);
     return () => clearInterval(timer);
-  }, []);
+  }, [devices, pollInterval, tapes.flatMap(t => t.segments.flatMap(s => s.sensors)).map(sr => sr.id).join(",")]);
 
   const toggleTape = useCallback((tapeId: number) => {
     setTapes(prev => prev.map(t => t.id === tapeId ? { ...t, enabled: !t.enabled } : t));
@@ -759,6 +827,24 @@ const Index = () => {
                 <Icon name="Calendar" size={14} />
                 {currentTime.toLocaleDateString("ru-RU")}
               </span>
+              {pollStatus === "polling" && (
+                <span className="flex items-center gap-1.5 text-primary animate-pulse">
+                  <Icon name="Radio" size={13} />
+                  ОПРОС...
+                </span>
+              )}
+              {pollStatus === "error" && (
+                <span className="flex items-center gap-1.5 text-red-400">
+                  <Icon name="WifiOff" size={13} />
+                  НЕТ СВЯЗИ
+                </span>
+              )}
+              {pollStatus === "idle" && lastPollTime && (
+                <span className="flex items-center gap-1.5 text-emerald-400">
+                  <Icon name="Wifi" size={13} />
+                  {lastPollTime}
+                </span>
+              )}
             </div>
             {unacknowledgedAlerts > 0 && (
               <Badge variant="destructive" className="animate-pulse font-mono">
