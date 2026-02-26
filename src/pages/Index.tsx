@@ -36,6 +36,8 @@ interface Sensor {
   temperature: number;
   status: "online" | "offline" | "error";
   lastUpdate: string;
+  deviceId?: number;
+  serialNumber?: string;
 }
 
 interface Segment {
@@ -614,6 +616,9 @@ const Index = () => {
     saveSettings({ devices });
   }, [devices]);
 
+  const [sensorModal, setSensorModal] = useState<{ tapeId: number; segId: number } | null>(null);
+  const [sensorForm, setSensorForm] = useState<{ deviceId: string; serialNumber: string; }>({ deviceId: "", serialNumber: "" });
+
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
@@ -691,6 +696,22 @@ const Index = () => {
     setTapes(prev => prev.map(t =>
       t.id === tapeId
         ? { ...t, segments: t.segments.map(s => s.id === segId ? { ...s, targetTemp } : s) }
+        : t
+    ));
+  }, []);
+
+  const addSensorToSegment = useCallback((tapeId: number, segId: number, sensor: Sensor) => {
+    setTapes(prev => prev.map(t =>
+      t.id === tapeId
+        ? { ...t, segments: t.segments.map(s => s.id === segId ? { ...s, sensors: [...s.sensors, sensor] } : s) }
+        : t
+    ));
+  }, []);
+
+  const removeSensorFromSegment = useCallback((tapeId: number, segId: number, sensorId: string) => {
+    setTapes(prev => prev.map(t =>
+      t.id === tapeId
+        ? { ...t, segments: t.segments.map(s => s.id === segId ? { ...s, sensors: s.sensors.filter(sr => sr.id !== sensorId) } : s) }
         : t
     ));
   }, []);
@@ -1016,6 +1037,48 @@ const Index = () => {
                             </Button>
                           </div>
                         </div>
+
+                        {/* Датчики сегмента */}
+                        <div className="mb-2 space-y-1">
+                          {seg.sensors.map(sensor => {
+                            const linkedDevice = devices.find(d => d.id === sensor.deviceId);
+                            return (
+                              <div key={sensor.id} className="flex items-center gap-2 px-2 py-1 rounded bg-background/40 border border-border/40">
+                                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${sensor.status === "online" ? "bg-emerald-400" : sensor.status === "error" ? "bg-red-400" : "bg-zinc-500"}`} />
+                                <div className="flex-1 min-w-0">
+                                  <span className="font-mono text-[10px] text-foreground">{sensor.serialNumber || sensor.serial}</span>
+                                  {linkedDevice && (
+                                    <span className="font-mono text-[9px] text-muted-foreground ml-1.5">
+                                      ← {linkedDevice.name}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className={`font-mono text-[10px] ${getTempColor(sensor.temperature)}`}>{sensor.temperature.toFixed(1)}°</span>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-5 w-5 p-0 text-muted-foreground hover:text-red-400 shrink-0"
+                                  onClick={() => removeSensorFromSegment(tape.id, seg.id, sensor.id)}
+                                >
+                                  <Icon name="X" size={10} />
+                                </Button>
+                              </div>
+                            );
+                          })}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full h-6 font-mono text-[10px] gap-1 border-dashed border-border/60 text-muted-foreground hover:text-foreground"
+                            onClick={() => {
+                              setSensorForm({ deviceId: devices[0] ? String(devices[0].id) : "", serialNumber: "" });
+                              setSensorModal({ tapeId: tape.id, segId: seg.id });
+                            }}
+                          >
+                            <Icon name="Plus" size={10} />
+                            Добавить датчик
+                          </Button>
+                        </div>
+
                         {seg.enabled && tape.enabled && (
                           <>
                             <div className="grid grid-cols-3 gap-2 mb-2">
@@ -1735,6 +1798,110 @@ const Index = () => {
           </TabsContent>
         </Tabs>
       </main>
+
+      {/* Модальный диалог добавления датчика */}
+      {sensorModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setSensorModal(null)}>
+          <div className="bg-card border border-border rounded-xl p-6 w-full max-w-sm mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-mono text-sm font-bold flex items-center gap-2">
+                <Icon name="Thermometer" size={16} className="text-primary" />
+                ДОБАВИТЬ ДАТЧИК
+              </h3>
+              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setSensorModal(null)}>
+                <Icon name="X" size={14} />
+              </Button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <Label className="text-xs font-mono text-muted-foreground">ОБОРУДОВАНИЕ</Label>
+                {devices.filter(d => d.enabled).length === 0 ? (
+                  <div className="mt-1.5 p-3 rounded-lg border border-border/50 bg-secondary/30 text-xs font-mono text-muted-foreground text-center">
+                    Нет доступных устройств.<br />Добавьте оборудование в настройках.
+                  </div>
+                ) : (
+                  <Select
+                    value={sensorForm.deviceId}
+                    onValueChange={v => setSensorForm(f => ({ ...f, deviceId: v }))}
+                  >
+                    <SelectTrigger className="font-mono mt-1 bg-secondary border-border text-sm">
+                      <SelectValue placeholder="Выберите контроллер..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {devices.filter(d => d.enabled).map(d => (
+                        <SelectItem key={d.id} value={String(d.id)}>
+                          <div className="flex items-center gap-2">
+                            <Icon name={d.connectionType === "ip" ? "Wifi" : "Usb"} size={13} />
+                            <span>{d.name}</span>
+                            <span className="text-muted-foreground text-xs">
+                              {d.connectionType === "ip" ? `${d.ip}:${d.port}` : d.serialPort}
+                            </span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+
+              <div>
+                <Label className="text-xs font-mono text-muted-foreground">СЕРИЙНЫЙ НОМЕР ДАТЧИКА</Label>
+                <Input
+                  value={sensorForm.serialNumber}
+                  onChange={e => setSensorForm(f => ({ ...f, serialNumber: e.target.value }))}
+                  placeholder="28-FF1234ABCD (1-Wire адрес)"
+                  className="font-mono mt-1 bg-secondary border-border text-sm"
+                />
+                <p className="text-[10px] text-muted-foreground font-mono mt-1">Адрес датчика DS18B20 / 1-Wire ID</p>
+              </div>
+
+              {sensorForm.deviceId && sensorForm.serialNumber && (
+                <div className="p-3 rounded-lg border border-primary/30 bg-primary/5 text-xs font-mono space-y-1">
+                  <p className="text-muted-foreground">Запрос данных будет выполняться:</p>
+                  {(() => {
+                    const dev = devices.find(d => d.id === Number(sensorForm.deviceId));
+                    if (!dev) return null;
+                    if (dev.connectionType === "ip") return (
+                      <p className="text-primary">GET http://{dev.ip}:{dev.port}/sensor/{sensorForm.serialNumber}</p>
+                    );
+                    return (
+                      <p className="text-primary">Serial {dev.serialPort} @ {dev.baudRate} → READ {sensorForm.serialNumber}</p>
+                    );
+                  })()}
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-1">
+                <Button
+                  className="flex-1 font-mono text-xs gap-1.5"
+                  disabled={!sensorForm.serialNumber}
+                  onClick={() => {
+                    if (!sensorForm.serialNumber) return;
+                    const newSensor: Sensor = {
+                      id: `SN-${Date.now()}`,
+                      serial: sensorForm.serialNumber,
+                      serialNumber: sensorForm.serialNumber,
+                      deviceId: sensorForm.deviceId ? Number(sensorForm.deviceId) : undefined,
+                      temperature: 0,
+                      status: "offline",
+                      lastUpdate: new Date().toLocaleTimeString("ru-RU"),
+                    };
+                    addSensorToSegment(sensorModal.tapeId, sensorModal.segId, newSensor);
+                    setSensorModal(null);
+                  }}
+                >
+                  <Icon name="Plus" size={13} />
+                  Добавить
+                </Button>
+                <Button variant="ghost" className="font-mono text-xs" onClick={() => setSensorModal(null)}>
+                  Отмена
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
